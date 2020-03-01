@@ -3,14 +3,15 @@
 #include <WiFiUdp.h>                         //    ditto
 #include <ArduinoOTA.h>                      //    ditto
 #include <MQTTClient.h>                      // MQTT Client from Joël Gaehwiler https://github.com/256dpi/arduino-mqtt   keepalive manually to 15s
+#include "pass.cpp"
 
 const char* Hostname = "DUS-VANN-KAI1.1_V2";            // change according your setup : it is used in OTA and as MQTT identifier
-String WiFi_SSID = "NSG IOT";               // change according your setup : SSID and password for the WiFi network
-String WiFi_PW = "AviDzHybObl4jXhGUIgh";                   //    "
+String WiFi_SSID = SECRET_SSID_NSG_IOT;               // change according your setup : SSID and password for the WiFi network
+String WiFi_PW = SECRET_SSID_NSG_IOT_PW;                   //    "
 const char* OTA_PW = "otapw";                // change according your setup : password for 'over the air sw update'
 String mqtt_broker = "mqtt.norseagroup.com";         // change according your setup : IP Adress or FQDN of your MQTT broker
-String mqtt_user = "MQTT-001";               // change according your setup : username and password for authenticated broker access
-String mqtt_pw = "4FkejDt59sqmJZW1Dc2B";                   //    "
+String mqtt_user = SECRET_BROKER_USER_KAI11;               // change according your setup : username and password for authenticated broker access
+String mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;                   //    "
 String input_topic = "/vann2/fromDevice";        // change according your setup : MQTT topic for messages from device to broker
 unsigned long waitCount = 0;                 // counter
 uint8_t conn_stat = 0;                       // Connection status for WiFi and MQTT:
