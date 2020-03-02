@@ -4,6 +4,8 @@
 #include <ArduinoOTA.h>                      //    ditto
 #include <MQTTClient.h>                      // MQTT Client from Joël Gaehwiler https://github.com/256dpi/arduino-mqtt   keepalive manually to 15s
 #include "pass.cpp"
+#include <WiFiUdp.h>
+#include <NTPClient.h>
 
 const char* Hostname = "DUS-VANN-KAI1.1_V2";            // change according your setup : it is used in OTA and as MQTT identifier
 String WiFi_SSID = SECRET_SSID_NSG_IOT;               // change according your setup : SSID and password for the WiFi network
@@ -34,6 +36,9 @@ const char* Status = "{\"Message\":\"up and running\"}";
 WiFiClientSecure TCP;                        // TCP client object, uses SSL/TLS
 MQTTClient mqttClient(512);                  // MQTT client object with a buffer size of 512 (depends on your message size)
 
+WiFiUDP ntpUDP;
+NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
+
 void messageReceived(String &topic, String &payload) {
 
   Serial.println("incoming: " + topic + " - " + payload);
@@ -51,6 +56,7 @@ void setup() {
   ArduinoOTA.setPassword(OTA_PW);                                 //       set OTA password
   ArduinoOTA.onError([](ota_error_t error) {ESP.restart();});     //       restart in case of an error during OTA
   ArduinoOTA.begin();                                             //       at this point OTA is set up
+  timeClient.begin();
 }
 
 
@@ -98,6 +104,9 @@ void loop() {                                                     // with curren
       mqttClient.publish(input_topic, Status);                      //      send status to broker
       mqttClient.loop();                                            //      give control to MQTT to send message to broker
       lastStatus = millis();                                        //      remember time of last sent status message
+      timeClient.update();
+
+      Serial.println(timeClient.getFormattedTime());
     }
     ArduinoOTA.handle();                                            // internal household function for OTA
     mqttClient.loop();                                              // internal household function for MQTT
