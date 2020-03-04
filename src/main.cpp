@@ -72,9 +72,8 @@ void loop() {                                                     // with curren
       conn_stat = 1;
       break;
     case 1:                                                       // WiFi starting, do nothing here
-      Serial.println("WiFi starting, wait : "+ String(waitCount));
-      waitCount++;
-      break;
+      Serial.printlnvgcåøø'
+      l
     case 2:                                                       // WiFi up, MQTT down: start MQTT
       Serial.println("WiFi up, MQTT down: start MQTT");
       mqttClient.begin(mqtt_broker.c_str(), 8883, TCP);           //   config MQTT Server, use port 8883 for secure connection
