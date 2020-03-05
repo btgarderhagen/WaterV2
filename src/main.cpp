@@ -1,122 +1,214 @@
-#include <WiFiClientSecure.h>                // needed for the WiFi communication
-#include <ESPmDNS.h>                         // for FOTA Suport
-#include <WiFiUdp.h>                         //    ditto
-#include <ArduinoOTA.h>                      //    ditto
-#include <MQTTClient.h>                      // MQTT Client from Joël Gaehwiler https://github.com/256dpi/arduino-mqtt   keepalive manually to 15s
-#include "pass.cpp"
-#include <WiFiUdp.h>
+#include <Arduino.h>
+#include <SPI.h>
+#include <eth.h>
+#include <MQTTClient.h>
+#include <WiFiClientSecure.h>
 #include <NTPClient.h>
+#include "pass.cpp"
 
-const char* Hostname = "DUS-VANN-KAI1.1_V2";            // change according your setup : it is used in OTA and as MQTT identifier
-String WiFi_SSID = SECRET_SSID_NSG_IOT;               // change according your setup : SSID and password for the WiFi network
-String WiFi_PW = SECRET_SSID_NSG_IOT_PW;                   //    "
-const char* OTA_PW = "otapw";                // change according your setup : password for 'over the air sw update'
-String mqtt_broker = "mqtt.norseagroup.com";         // change according your setup : IP Adress or FQDN of your MQTT broker
-String mqtt_user = SECRET_BROKER_USER_KAI11;               // change according your setup : username and password for authenticated broker access
-String mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;                   //    "
-String input_topic = "/vann2/fromDevice";        // change according your setup : MQTT topic for messages from device to broker
-unsigned long waitCount = 0;                 // counter
-uint8_t conn_stat = 0;                       // Connection status for WiFi and MQTT:
-                                             //
-                                             // status |   WiFi   |    MQTT
-                                             // -------+----------+------------
-                                             //      0 |   down   |    down
-                                             //      1 | starting |    down
-                                             //      2 |    up    |    down
-                                             //      3 |    up    |  starting
-                                             //      4 |    up    | finalising
-                                             //      5 |    up    |     up
+const char* Hostname = "DUS-VANN-KAI1.1_V2"; 
+const char* mqtt_to_device = "/vann2/toDevice";
+const char* mqtt_broker = "mqtt.norseagroup.com";
+const char* mqtt_user = SECRET_BROKER_USER_KAI11; 
+const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;  
+const char* devicename = SECRET_DEVICE_KAI62;
+const char* Description = SECRET_DEVICE_KAI62_DESC;
+const char* input_topic = "/vann2/fromDevice";   
 
-unsigned long lastStatus = 0;                // counter in example code for conn_stat == 5
-unsigned long lastTask = 0;                  // counter in example code for conn_stat <> 5
+const char* Version = "2.01";
 
-const char* Version = "{\"Version\":\"low_prio_wifi_v2\"}";
-const char* Status = "{\"Message\":\"up and running\"}";
+// MODUINO
+#include <SSD1306.h>
+#define flowmeterPin 36 //Moduino 36 - IN1
+#define buttonPin 32
+#define resetPin 34     //Moduino 34 - User Button
+#define OLED_ADDRESS 0x3c
+#define I2C_SDA 12
+#define I2C_SCL 13
+#define DISPLAYTYPE GEOMETRY_128_64
+#define baud 115200
+String rotate = "Yes";
 
-WiFiClientSecure TCP;                        // TCP client object, uses SSL/TLS
-MQTTClient mqttClient(512);                  // MQTT client object with a buffer size of 512 (depends on your message size)
+// TTGO
+//#include <SSD1306.h>
+//#define flowmeterPin 32   //02
+//#define buttonPin 32      //32
+//#define resetPin 34
+//#define OLED_ADDRESS 0x3c
+//#define I2C_SDA 14
+//#define I2C_SCL 13
+//#define DISPLAYTYPE GEOMETRY_128_32
+//#define baud 115200
+//#define displayorientation TEXT_ALIGN_RIGHT  
+//String rotate = "No";
+
+static bool eth_is_connected = false;
+static bool mqttClient_is_started = false;
+unsigned long lastStatus = 0;  
+
+//Runtime variables
+volatile double flow_rate;
+int flow_max = 300;
+unsigned int pulse_since_last_loop;
+volatile unsigned long pulsecount = 0;
+unsigned long flowLastReportTime;
+unsigned long flowCurrentTime;
+bool lastflowpin = 1;
+bool flowpin;
+bool started = false;
+unsigned long starttime;
+unsigned long lastflowtime;
+unsigned long startpulse = 0;
+volatile int callbackWD = 0;
+int rssi = -100;
+
+const double vol_pr_pulse = 0.001;   //m3
+const char* VolumeUnit = "m3";
+const char* FlowUnit = "m3/Hour";
+
+unsigned long boot_timestamp = 0;
+String boot_time = "";
+
+WiFiClientSecure TCP;                        
+MQTTClient mqttClient(512);  
 
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "europe.pool.ntp.org", 3600, 60000);
+NTPClient timeClient(ntpUDP, "no.pool.ntp.org", 3600, 60000);
+SSD1306 display(OLED_ADDRESS, I2C_SDA, I2C_SCL, DISPLAYTYPE);
+
+const char* Status = "{\"Message\":\"up and running\"}";
 
 void messageReceived(String &topic, String &payload) {
-
   Serial.println("incoming: " + topic + " - " + payload);
-  // Note: Do not use the client in the callback to publish, subscribe or
-  // unsubscribe as it may cause deadlocks when other things arrive while
-  // sending and receiving acknowledgments. Instead, change a global variable,
-  // or push to a queue and handle it in the loop after calling `client.loop()`.
 }
+
+void WiFiEvent(WiFiEvent_t event) {
+  switch (event) {
+    case SYSTEM_EVENT_ETH_START:
+      Serial.println("ETH Started");
+      //set eth hostname here
+      ETH.setHostname(Hostname);
+      break;
+    case SYSTEM_EVENT_ETH_CONNECTED:
+      Serial.println("ETH Connected");
+      break;
+    case SYSTEM_EVENT_ETH_GOT_IP:
+      Serial.print("ETH MAC: ");
+      Serial.print(ETH.macAddress());
+      Serial.print(", IPv4: ");
+      Serial.print(ETH.localIP());
+      if (ETH.fullDuplex()) {
+        Serial.print(", FULL_DUPLEX");
+      }
+      Serial.print(", ");
+      Serial.print(ETH.linkSpeed());
+      Serial.println("Mbps");
+      eth_is_connected = true;
+      mqttClient_is_started = false;
+      break;
+    case SYSTEM_EVENT_ETH_DISCONNECTED:
+      Serial.println("ETH Disconnected");
+      eth_is_connected = false;
+      break;
+    case SYSTEM_EVENT_ETH_STOP:
+      Serial.println("ETH Stopped");
+      eth_is_connected = false;
+      break;
+    default:
+      break;
+  }
+
+}
+
+String GetUptime(){
+  unsigned long uptimeseconds = (timeClient.getEpochTime() - boot_timestamp)  ;
+  long days=0;
+  long hours=0;
+  long mins=0;
+  mins=uptimeseconds/60.0; //convert seconds to minutes
+  hours=mins/60.0; //convert minutes to hours
+  days=hours/24.0; //convert hours to days
+  uptimeseconds=uptimeseconds-(mins*60.0); //subtract the coverted seconds to minutes in order to display 59 secs max
+  mins=mins-(hours*60.0); //subtract the coverted minutes to hours in order to display 59 minutes max
+  hours=hours-(days*24.0); //subtract the coverted hours to days in order to display 23 hours max
+  return String(days) + " Days " + String(hours) + ":" + String(mins) + ":" + String(uptimeseconds);
+}
+
+void StartMqttClient(){
+  Serial.println("Starting MQTT Client");
+    mqttClient.begin(mqtt_broker, 8883, TCP);           //   config MQTT Server, use port 8883 for secure connection
+    mqttClient.onMessage(messageReceived);
+    mqttClient.connect(Hostname, mqtt_user, mqtt_pw);
+    mqttClient.subscribe(mqtt_to_device);
+    timeClient.begin();
+    timeClient.update();
+    mqttClient_is_started = true;
+
+    if(boot_timestamp == 0){
+      boot_timestamp = timeClient.getEpochTime();
+      boot_time = timeClient.getFormattedTime();
+    }
+}
+
 
 void setup() {
   Serial.begin(115200);
-  WiFi.mode(WIFI_STA);                                            // config WiFi as client
-  MDNS.begin(Hostname);                                           // start MDNS, needed for OTA
-  ArduinoOTA.setHostname(Hostname);                               // initialize and start OTA
-  ArduinoOTA.setPassword(OTA_PW);                                 //       set OTA password
-  ArduinoOTA.onError([](ota_error_t error) {ESP.restart();});     //       restart in case of an error during OTA
-  ArduinoOTA.begin();                                             //       at this point OTA is set up
-  timeClient.begin();
+
+  //Display
+  display.init();
+  if(rotate == "Yes")
+  {
+    display.flipScreenVertically();
+  }
+  
+  display.setFont(ArialMT_Plain_10);
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.drawString(0, 0, "Booting....");
+  display.drawString(0,10, "Waiting for ethernet");
+  display.display();
+
+  WiFi.onEvent(WiFiEvent);
+  ETH.begin(0, -1, 33, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
 }
 
-
-void loop() {                                                     // with current code runs roughly 400 times per second
-// start of non-blocking connection setup section
-  if ((WiFi.status() != WL_CONNECTED) && (conn_stat != 1)) { conn_stat = 0; }
-  if ((WiFi.status() == WL_CONNECTED) && !mqttClient.connected() && (conn_stat != 3))  { conn_stat = 2; }
-  if ((WiFi.status() == WL_CONNECTED) && mqttClient.connected() && (conn_stat != 5)) { conn_stat = 4;}
-  switch (conn_stat) {
-    case 0:                                                       // MQTT and WiFi down: start WiFi
-      Serial.println("MQTT and WiFi down: start WiFi");
-      WiFi.begin(WiFi_SSID.c_str(), WiFi_PW.c_str());
-      conn_stat = 1;
-      break;
-    case 1:                                                       // WiFi starting, do nothing here
-      Serial.printlnvgcåøø'
-      l
-    case 2:                                                       // WiFi up, MQTT down: start MQTT
-      Serial.println("WiFi up, MQTT down: start MQTT");
-      mqttClient.begin(mqtt_broker.c_str(), 8883, TCP);           //   config MQTT Server, use port 8883 for secure connection
-      mqttClient.onMessage(messageReceived);
-      mqttClient.connect(Hostname, mqtt_user.c_str(), mqtt_pw.c_str());
-      mqttClient.subscribe("/vann2/toDevice");
-      conn_stat = 3;
-      waitCount = 0;
-      break;
-    case 3:                                                       // WiFi up, MQTT starting, do nothing here
-      Serial.println("WiFi up, MQTT starting, wait : "+ String(waitCount));
-      waitCount++;
-      break;
-    case 4:                                                       // WiFi up, MQTT up: finish MQTT configuration
-      Serial.println("WiFi up, MQTT up: finish MQTT configuration");
-      //mqttClient.subscribe(output_topic);
-      mqttClient.publish(input_topic, Version);
-      conn_stat = 5;                    
-      break;
+void loop()
+{
+  if(eth_is_connected & !mqttClient_is_started){
+    StartMqttClient();
   }
-// end of non-blocking connection setup section
 
-// start section with tasks where WiFi/MQTT is required
-  if (conn_stat == 5) {
+  //Only when connected
+  if (eth_is_connected) { 
+
+    //Send report
     if (millis() - lastStatus > 10000) {                            // Start send status every 10 sec (just as an example)
       Serial.println(Status);
       mqttClient.publish(input_topic, Status);                      //      send status to broker
       mqttClient.loop();                                            //      give control to MQTT to send message to broker
       lastStatus = millis();                                        //      remember time of last sent status message
       timeClient.update();
-
+      Serial.println(GetUptime());
       Serial.println(timeClient.getFormattedTime());
-    }
-    ArduinoOTA.handle();                                            // internal household function for OTA
-    mqttClient.loop();                                              // internal household function for MQTT
-  } 
-// end of section for tasks where WiFi/MQTT are required
+      
 
-// start section for tasks which should run regardless of WiFi/MQTT
-  if (millis() - lastTask > 1000) {                                 // Print message every second (just as an example)
-    Serial.println("print this every second");
-    lastTask = millis();
+    }
+    mqttClient.loop();                                              // internal household function for MQTT
   }
+
+  //Update display
+  display.clear();
+  display.drawString(0, 0, String(flow_rate * 1.0,3) + " " + FlowUnit);
+  display.drawString(0, 10, String(pulsecount * vol_pr_pulse, 3 ) + " " + VolumeUnit);     
+  display.drawString(0,20, "Uptime: " + GetUptime());
+
+  //Moduino supports four lines, and requires rotation of display
+  if(rotate == "Yes")
+  {
+    display.drawString(0, 30, Description);
+    display.drawString(0, 40, "Build Version : " + String(Version));
+    display.drawString(0, 50, devicename);
+  }       
+  display.display(); 
+
   delay(100);
-// end of section for tasks which should run regardless of WiFi/MQTT
 }
