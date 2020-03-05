@@ -189,8 +189,6 @@ void loop()
       timeClient.update();
       Serial.println(GetUptime());
       Serial.println(timeClient.getFormattedTime());
-      
-
     }
     mqttClient.loop();                                              // internal household function for MQTT
   }
