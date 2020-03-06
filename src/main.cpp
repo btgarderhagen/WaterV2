@@ -3,6 +3,7 @@
 #include <eth.h>
 #include <MQTTClient.h>
 #include <WiFiClientSecure.h>
+#include <ArduinoJson.h>
 #include <NTPClient.h>
 #include "pass.cpp"
 
@@ -65,6 +66,9 @@ int rssi = -100;
 const double vol_pr_pulse = 0.001;   //m3
 const char* VolumeUnit = "m3";
 const char* FlowUnit = "m3/Hour";
+//const double Factor = 1.0;                        // Second
+//const double Factor = 60.0;                       // Minute
+const double Factor = 60.0 * 60.0;                  // Hour
 
 unsigned long boot_timestamp = 0;
 String boot_time = "";
@@ -76,10 +80,32 @@ WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "no.pool.ntp.org", 3600, 60000);
 SSD1306 display(OLED_ADDRESS, I2C_SDA, I2C_SCL, DISPLAYTYPE);
 
+TaskHandle_t Task1;
+TaskHandle_t Task2;
+
 const char* Status = "{\"Message\":\"up and running\"}";
 
 void messageReceived(String &topic, String &payload) {
   Serial.println("incoming: " + topic + " - " + payload);
+  StaticJsonDocument<2000> doc;
+  deserializeJson(doc, &payload);
+
+  //Only process messages to this device
+  if (doc["device"] == "Hostname")
+  {
+    //Run commands
+    if(doc["command"] == "Method")
+    {
+
+    }
+
+    //Run Data updates
+    if(doc["update"] == "")
+    {
+      
+    }
+  }
+
 }
 
 void WiFiEvent(WiFiEvent_t event) {
@@ -150,9 +176,136 @@ void StartMqttClient(){
     }
 }
 
+void sensorloop( void * parameter )
+{
+  do{
+
+    //detect flow pult
+    flowpin = digitalRead(flowmeterPin);
+    if(flowpin != lastflowpin)
+    {
+      if(flowpin)
+      {
+        pulse_since_last_loop++;
+        pulsecount = pulsecount + 1;  
+      }      
+      lastflowpin = flowpin;
+    }
+
+    vTaskDelay(1);
+
+  }while(true);
+
+}
+
+void flowloop( void * parameter )
+{
+  do{
+
+    flowCurrentTime = millis();
+    if(flowCurrentTime >= (flowLastReportTime + 5000))
+    {
+      flowLastReportTime = flowCurrentTime;
+      flow_rate = (vol_pr_pulse * Factor * pulse_since_last_loop / 5.0);
+      pulse_since_last_loop = 0.0;
+
+      callbackWD++;
+      if(callbackWD > 10)
+      {
+         ESP.restart();
+      }
+     
+    }
+    vTaskDelay(1);
+
+  }while(true);
+
+}
+
+static int  handleMethod(const char *methodName, const unsigned char *payload, int size, unsigned char **response, int *response_size)
+{
+  const char *responseMessage = "\"Successfully invoke device method\"";
+  int result = 200;
+
+  if (strcmp(methodName, "pulsecount") == 0)
+  {
+    char *temp = (char *)malloc(size + 1);
+    memcpy(temp, payload, size);
+    temp[size] = '\0';
+    pulsecount = (unsigned)strtoul(temp,NULL,10);
+  }
+  else if (strcmp(methodName, "flow_max") == 0)
+  {
+    char *temp = (char *)malloc(size + 1);
+    memcpy(temp, payload, size);
+    temp[size] = '\0';
+    flow_max = atoi(temp);
+  }
+  else if (strcmp(methodName, "reboot") == 0)
+  {
+    ESP.restart();
+  }
+  else
+  {
+    responseMessage = "\"No method found\"";
+    result = 404;
+  }
+ 
+  
+  *response_size = strlen(responseMessage) + 1;
+  *response = (unsigned char *)strdup(responseMessage);
+
+  return result;
+}
+
+static void DeviceTwinCallback(const unsigned char *payLoad, int size)
+{
+  char *temp = (char *)malloc(size + 1);
+  if (temp == NULL)
+  {
+    return;
+  }
+  memcpy(temp, payLoad, size);
+  temp[size] = '\0';
+  StaticJsonDocument<2000> doc;
+  deserializeJson(doc, payLoad);
+  long twinPulsecount = (unsigned long)doc["reported"]["pulsecount"];      
+  if (twinPulsecount > pulsecount)
+  {
+    pulsecount = twinPulsecount;
+  }  
+  int twinFlowMax = (int)doc["reported"]["flow_max"];      
+  if ((twinFlowMax > 0) & (twinFlowMax != flow_max))
+  {
+    flow_max = twinFlowMax;
+  }
+  free(temp);
+
+}
 
 void setup() {
   Serial.begin(115200);
+
+  
+    xTaskCreatePinnedToCore(
+      sensorloop,
+      "sensorloop",
+      6000,
+      NULL,
+      1,
+      &Task1,
+      0);
+
+  xTaskCreatePinnedToCore(
+      flowloop,
+      "flowloop",
+      6000,
+      NULL,
+      1,
+      &Task2,
+      0);
+
+ 
 
   //Display
   display.init();
