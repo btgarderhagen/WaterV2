@@ -7,16 +7,19 @@
 #include <NTPClient.h>
 #include "pass.cpp"
 
-const char* Hostname = "DUS-VANN-KAI1.1_V2"; 
-const char* mqtt_to_device = "/vann2/toDevice";
-const char* mqtt_broker = "mqtt.norseagroup.com";
+String devicename = SECRET_DEVICE_KAI62;
 const char* mqtt_user = SECRET_BROKER_USER_KAI11; 
 const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;  
-const char* devicename = SECRET_DEVICE_KAI62;
 const char* Description = SECRET_DEVICE_KAI62_DESC;
-const char* input_topic = "/vann2/fromDevice";   
 
+
+
+const char* Hostname = devicename.c_str();
+const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI6.2" ;
+const char* mqtt_broker = "mqtt.norseagroup.com";
+const char* input_topic = "/vann2/fromDevice";   
 const char* Version = "2.01";
+
 
 // MODUINO
 #include <SSD1306.h>
@@ -87,7 +90,7 @@ const char* Status = "{\"Message\":\"up and running\"}";
 
 void messageReceived(String &topic, String &payload) {
   Serial.println("incoming: " + topic + " - " + payload);
-  StaticJsonDocument<2000> doc;
+  StaticJsonDocument<3000> doc;
   deserializeJson(doc, payload);
 
   //Only process messages to this device
@@ -95,7 +98,11 @@ void messageReceived(String &topic, String &payload) {
   {
     if (strcmp(doc["command"], "pulsecount") == 0)
     {
-      pulsecount = doc["value"] ;
+      JsonVariant v = doc["value"];
+      //Serial.println(v);
+      pulsecount = doc["value"].as<unsigned long>();
+      Serial.println(doc["value"].as<int>());
+      Serial.println(v.as<char*>());
     }
     else if (strcmp(doc["command"], "flow_max") == 0)
     {
@@ -107,7 +114,7 @@ void messageReceived(String &topic, String &payload) {
     }
     else
     {
-      //Send Error
+      Serial.println("Unknown command : " + String(""));
     }
   }
 }
@@ -170,6 +177,7 @@ void StartMqttClient(){
     mqttClient.onMessage(messageReceived);
     mqttClient.connect(Hostname, mqtt_user, mqtt_pw);
     mqttClient.subscribe(mqtt_to_device);
+    Serial.println(mqtt_to_device);
     timeClient.begin();
     timeClient.update();
     mqttClient_is_started = true;
@@ -214,7 +222,7 @@ void flowloop( void * parameter )
       pulse_since_last_loop = 0.0;
 
       callbackWD++;
-      if(callbackWD > 10)
+      if(callbackWD > 100)
       {
          ESP.restart();
       }
@@ -304,7 +312,7 @@ void loop()
     //Send report
     if (millis() - lastStatus > 10000) {                            // Start send status every 10 sec (just as an example)
       Serial.println(Status);
-      mqttClient.publish(input_topic, Status);                      //      send status to broker
+      mqttClient.publish(input_topic, String(pulsecount));                      //      send status to broker
       mqttClient.loop();                                            //      give control to MQTT to send message to broker
       lastStatus = millis();                                        //      remember time of last sent status message
       timeClient.update();
