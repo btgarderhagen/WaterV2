@@ -88,24 +88,28 @@ const char* Status = "{\"Message\":\"up and running\"}";
 void messageReceived(String &topic, String &payload) {
   Serial.println("incoming: " + topic + " - " + payload);
   StaticJsonDocument<2000> doc;
-  deserializeJson(doc, &payload);
+  deserializeJson(doc, payload);
 
   //Only process messages to this device
-  if (doc["device"] == "Hostname")
+  if (doc["device"] == Hostname)
   {
-    //Run commands
-    if(doc["command"] == "Method")
+    if (strcmp(doc["command"], "pulsecount") == 0)
     {
-
+      pulsecount = doc["value"] ;
     }
-
-    //Run Data updates
-    if(doc["update"] == "")
+    else if (strcmp(doc["command"], "flow_max") == 0)
     {
-      
+        flow_max = doc["value"];
+    }
+    else if (strcmp(doc["command"], "reboot") == 0)
+    {
+      ESP.restart();
+    }
+    else
+    {
+      //Send Error
     }
   }
-
 }
 
 void WiFiEvent(WiFiEvent_t event) {
@@ -220,42 +224,6 @@ void flowloop( void * parameter )
 
   }while(true);
 
-}
-
-static int  handleMethod(const char *methodName, const unsigned char *payload, int size, unsigned char **response, int *response_size)
-{
-  const char *responseMessage = "\"Successfully invoke device method\"";
-  int result = 200;
-
-  if (strcmp(methodName, "pulsecount") == 0)
-  {
-    char *temp = (char *)malloc(size + 1);
-    memcpy(temp, payload, size);
-    temp[size] = '\0';
-    pulsecount = (unsigned)strtoul(temp,NULL,10);
-  }
-  else if (strcmp(methodName, "flow_max") == 0)
-  {
-    char *temp = (char *)malloc(size + 1);
-    memcpy(temp, payload, size);
-    temp[size] = '\0';
-    flow_max = atoi(temp);
-  }
-  else if (strcmp(methodName, "reboot") == 0)
-  {
-    ESP.restart();
-  }
-  else
-  {
-    responseMessage = "\"No method found\"";
-    result = 404;
-  }
- 
-  
-  *response_size = strlen(responseMessage) + 1;
-  *response = (unsigned char *)strdup(responseMessage);
-
-  return result;
 }
 
 static void DeviceTwinCallback(const unsigned char *payLoad, int size)
