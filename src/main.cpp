@@ -18,6 +18,7 @@ const char* Hostname = devicename.c_str();
 const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI6.2" ;
 const char* mqtt_broker = "mqtt.norseagroup.com";
 const char* input_topic = "/vann2/fromDevice";   
+const char* start_topic = "/vann/devicestart";   
 const char* Version = "2.01";
 
 
@@ -54,7 +55,7 @@ unsigned long lastStatus = 0;
 volatile double flow_rate;
 int flow_max = 300;
 unsigned int pulse_since_last_loop;
-volatile unsigned long pulsecount = 0;
+volatile int pulsecount = 0;
 unsigned long flowLastReportTime;
 unsigned long flowCurrentTime;
 bool lastflowpin = 1;
@@ -65,6 +66,7 @@ unsigned long lastflowtime;
 unsigned long startpulse = 0;
 volatile int callbackWD = 0;
 int rssi = -100;
+bool do_startup_report = true;
 
 const double vol_pr_pulse = 0.001;   //m3
 const char* VolumeUnit = "m3";
@@ -98,11 +100,7 @@ void messageReceived(String &topic, String &payload) {
   {
     if (strcmp(doc["command"], "pulsecount") == 0)
     {
-      JsonVariant v = doc["value"];
-      //Serial.println(v);
-      pulsecount = doc["value"].as<unsigned long>();
-      Serial.println(doc["value"].as<int>());
-      Serial.println(v.as<char*>());
+      pulsecount = doc["value"].as<int>();
     }
     else if (strcmp(doc["command"], "flow_max") == 0)
     {
@@ -304,6 +302,19 @@ void loop()
 {
   if(eth_is_connected & !mqttClient_is_started){
     StartMqttClient();
+  } else if(eth_is_connected & mqttClient_is_started & do_startup_report)
+  {
+    //Create start document payload and send. Only once pr reboot.
+    String payload;
+    StaticJsonDocument<300> startdoc;
+    startdoc["hostname"] = devicename;
+    startdoc["ip"] = ETH.localIP().toString();
+    startdoc["start"] = timeClient.getEpochTime();
+    serializeJson(startdoc, payload);
+    Serial.println(payload);
+    mqttClient.publish(start_topic, payload);
+    mqttClient.loop(); 
+    do_startup_report = false;
   }
 
   //Only when connected
@@ -316,8 +327,18 @@ void loop()
       mqttClient.loop();                                            //      give control to MQTT to send message to broker
       lastStatus = millis();                                        //      remember time of last sent status message
       timeClient.update();
-      Serial.println(GetUptime());
-      Serial.println(timeClient.getFormattedTime());
+
+      String payload;
+      StaticJsonDocument<300> startdoc;
+      startdoc["hostname"] = devicename;
+      startdoc["ip"] = ETH.localIP().toString();
+      startdoc["start"] = timeClient.getEpochTime();
+      serializeJson(startdoc, payload);
+      Serial.println(payload);
+      mqttClient.publish(start_topic, payload);
+      mqttClient.loop(); 
+
+
     }
     mqttClient.loop();                                              // internal household function for MQTT
   }
