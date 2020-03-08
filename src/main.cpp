@@ -57,7 +57,7 @@ volatile int pulsecount = 0;
 unsigned long flowLastReportTime;
 unsigned long flowCurrentTime;
 int start_min_flow = 5;
-int stopp_min_no_flow = 2;
+int stopp_no_flow_minutes = 2;
 
 bool lastflowpinstatus = 1;
 bool flowpinstatus;
@@ -110,17 +110,21 @@ void messageReceived(String &topic, String &payload) {
     {
       pulsecount = doc["value"].as<int>();
     }
-    if (strcmp(doc["command"], "start_min_flow") == 0)
+    else if (strcmp(doc["command"], "pulsecount_first") == 0)
+    {
+      pulsecount = pulsecount + doc["value"].as<int>();
+    }
+    else if (strcmp(doc["command"], "start_min_flow") == 0)
     {
       start_min_flow = doc["value"].as<int>();
     }
-    if (strcmp(doc["command"], "stopp_min_no_flow") == 0)
+    else if (strcmp(doc["command"], "stopp_no_flow_minutes") == 0)
     {
-      stopp_min_no_flow = doc["value"].as<int>();
+      stopp_no_flow_minutes = doc["value"].as<int>();
     }
     else if (strcmp(doc["command"], "flow_max") == 0)
     {
-        flow_max = doc["value"];
+        flow_max = doc["value"].as<int>();
     }
     else if (strcmp(doc["command"], "reboot") == 0)
     {
@@ -128,7 +132,7 @@ void messageReceived(String &topic, String &payload) {
     }
     else
     {
-      Serial.println("Unknown command : " + String(""));
+      Serial.println("Unknown command : " + payload);
     }
   }
 }
@@ -408,7 +412,7 @@ void loop()
       //flow smaller than min
       if(started)
       {
-        if(timeClient.getEpochTime() >= (lastflowtime + (stopp_min_no_flow*60)))
+        if(timeClient.getEpochTime() >= (lastflowtime + (stopp_no_flow_minutes)))
         {
           started= false;
           
@@ -424,7 +428,7 @@ void loop()
           stopdoc["startvolume"] = startpulse * vol_pr_pulse;
           stopdoc["stoppvolume"] = pulsecount * vol_pr_pulse;
           stopdoc["volume"] = (pulsecount - startpulse) * vol_pr_pulse ;
-          
+
           serializeJson(stopdoc, payload);
           Serial.println(payload);
           mqttClient.publish(input_topic, payload); 
