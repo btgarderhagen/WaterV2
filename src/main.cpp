@@ -25,7 +25,7 @@ const char* Version = "2.02";
 // MODUINO
 #include <SSD1306.h>
 #define flowmeterPin 36 //Moduino 36 - IN1
-#define buttonPin 0
+#define buttonPin 34
 #define OLED_ADDRESS 0x3c
 #define I2C_SDA 12
 #define I2C_SCL 13
@@ -56,6 +56,8 @@ unsigned int pulse_since_last_loop;
 volatile int pulsecount = 0;
 unsigned long flowLastReportTime;
 unsigned long flowCurrentTime;
+int start_min_flow = 5;
+int stopp_min_no_flow = 2;
 
 bool lastflowpinstatus = 1;
 bool flowpinstatus;
@@ -107,6 +109,14 @@ void messageReceived(String &topic, String &payload) {
     if (strcmp(doc["command"], "pulsecount") == 0)
     {
       pulsecount = doc["value"].as<int>();
+    }
+    if (strcmp(doc["command"], "start_min_flow") == 0)
+    {
+      start_min_flow = doc["value"].as<int>();
+    }
+    if (strcmp(doc["command"], "stopp_min_no_flow") == 0)
+    {
+      stopp_min_no_flow = doc["value"].as<int>();
     }
     else if (strcmp(doc["command"], "flow_max") == 0)
     {
@@ -204,7 +214,7 @@ void sensorloop( void * parameter )
       if(flowpinstatus)
       {
         pulse_since_last_loop++;
-        pulsecount = pulsecount + 1;  
+        pulsecount++;  
       }      
       lastflowpinstatus = flowpinstatus;
     }
@@ -226,7 +236,7 @@ void buttonloop( void * parameter )
       if(buttonpinstatus)
       {
         pulse_since_last_loop++;
-        pulsecount = pulsecount + 1;  
+        pulsecount++;    
       }      
       lastbuttonpinstatus = buttonpinstatus;
     }
@@ -327,6 +337,7 @@ void loop()
     startdoc["hostname"] = devicename;
     startdoc["ip"] = ETH.localIP().toString();
     startdoc["start"] = timeClient.getEpochTime();
+    startdoc["version"] = Version;
     serializeJson(startdoc, payload);
     Serial.println(payload);
     mqttClient.publish(start_topic, payload);
@@ -375,6 +386,51 @@ void loop()
     display.drawString(0, 50, devicename);
   }       
   display.display(); 
+  
+  //Detect start / stopp operation
+  if(flow_rate > start_min_flow)
+    {
+      //update timestamp for last flow more  than min
+      lastflowtime = timeClient.getEpochTime();
 
+      //start the operation if not already started
+      if(!started)
+      {
+        Serial.println("Started");
+        started = true;
+        starttime = timeClient.getEpochTime();
+        startpulse = pulsecount;
+      }
+      
+            
+    }else
+    {
+      //flow smaller than min
+      if(started)
+      {
+        if(timeClient.getEpochTime() >= (lastflowtime + (stopp_min_no_flow*60)))
+        {
+          started= false;
+          
+          //Send stopp message
+          String payload;
+          StaticJsonDocument<300> stopdoc;
+          
+          stopdoc["hostname"] = devicename;
+          stopdoc["type"] = "stopp";
+          stopdoc["starttime"] = starttime;
+          stopdoc["stopptime"] = timeClient.getEpochTime();
+          stopdoc["duration"] = timeClient.getEpochTime() - starttime;
+          stopdoc["startvolume"] = startpulse * vol_pr_pulse;
+          stopdoc["stoppvolume"] = pulsecount * vol_pr_pulse;
+          stopdoc["volume"] = (pulsecount - startpulse) * vol_pr_pulse ;
+          
+          serializeJson(stopdoc, payload);
+          Serial.println(payload);
+          mqttClient.publish(input_topic, payload); 
+
+        }
+      }
+    }
   delay(100);
 }
