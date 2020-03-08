@@ -19,7 +19,7 @@ const char* mqtt_broker = "mqtt.norseagroup.com";
 const char* input_topic = "/vann2/fromDevice";   
 const char* start_topic = "/vann/devicestart";   
 const char* hartbeat_topic = "/vann/hartbeat";   
-const char* Version = "2.02";
+const char* Version = "2.03";
 
 
 // MODUINO
@@ -63,6 +63,7 @@ bool lastflowpinstatus = 1;
 bool flowpinstatus;
 bool lastbuttonpinstatus = 1;
 bool buttonpinstatus;
+bool pulsecount_recieved = false;
 
 bool started = false;
 unsigned long starttime;
@@ -93,7 +94,6 @@ TaskHandle_t Task1;
 TaskHandle_t Task2;
 TaskHandle_t Task3;
 
-const char* Status = "{\"Message\":\"up and running\"}";
 
 void messageReceived(String &topic, String &payload) {
   Serial.println("incoming: " + topic + " - " + payload);
@@ -101,7 +101,7 @@ void messageReceived(String &topic, String &payload) {
   deserializeJson(doc, payload);
   if(topic == hartbeat_topic)
   {
-      callbackWD=payload.toInt();
+      callbackWD=payload.toInt()/5;
   }
   //Only process messages to this device
   else if (doc["device"] == Hostname)
@@ -113,6 +113,7 @@ void messageReceived(String &topic, String &payload) {
     else if (strcmp(doc["command"], "pulsecount_first") == 0)
     {
       pulsecount = pulsecount + doc["value"].as<int>();
+      pulsecount_recieved = true;
     }
     else if (strcmp(doc["command"], "start_min_flow") == 0)
     {
@@ -367,7 +368,10 @@ void loop()
       
       serializeJson(report, payload);
       Serial.println(payload);
-      mqttClient.publish(input_topic, payload);                      //      send status to broker
+      if(pulsecount_recieved)
+      {
+        mqttClient.publish(input_topic, payload);                      //      send status to broker
+      }
       mqttClient.loop();                                            //      give control to MQTT to send message to broker
       lastStatus = millis();                                        //      remember time of last sent status message
       timeClient.update();
