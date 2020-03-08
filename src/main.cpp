@@ -13,20 +13,19 @@ const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;
 const char* Description = SECRET_DEVICE_KAI62_DESC;
 
 
-
 const char* Hostname = devicename.c_str();
 const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI6.2" ;
 const char* mqtt_broker = "mqtt.norseagroup.com";
 const char* input_topic = "/vann2/fromDevice";   
 const char* start_topic = "/vann/devicestart";   
-const char* Version = "2.01";
+const char* hartbeat_topic = "/vann/hartbeat";   
+const char* Version = "2.02";
 
 
 // MODUINO
 #include <SSD1306.h>
 #define flowmeterPin 36 //Moduino 36 - IN1
-#define buttonPin 32
-#define resetPin 34     //Moduino 34 - User Button
+#define buttonPin 0
 #define OLED_ADDRESS 0x3c
 #define I2C_SDA 12
 #define I2C_SCL 13
@@ -38,7 +37,6 @@ String rotate = "Yes";
 //#include <SSD1306.h>
 //#define flowmeterPin 32   //02
 //#define buttonPin 32      //32
-//#define resetPin 34
 //#define OLED_ADDRESS 0x3c
 //#define I2C_SDA 14
 //#define I2C_SCL 13
@@ -58,13 +56,17 @@ unsigned int pulse_since_last_loop;
 volatile int pulsecount = 0;
 unsigned long flowLastReportTime;
 unsigned long flowCurrentTime;
-bool lastflowpin = 1;
-bool flowpin;
+
+bool lastflowpinstatus = 1;
+bool flowpinstatus;
+bool lastbuttonpinstatus = 1;
+bool buttonpinstatus;
+
 bool started = false;
 unsigned long starttime;
 unsigned long lastflowtime;
 unsigned long startpulse = 0;
-volatile int callbackWD = 0;
+volatile int callbackWD = 120;
 int rssi = -100;
 bool do_startup_report = true;
 
@@ -87,6 +89,7 @@ SSD1306 display(OLED_ADDRESS, I2C_SDA, I2C_SCL, DISPLAYTYPE);
 
 TaskHandle_t Task1;
 TaskHandle_t Task2;
+TaskHandle_t Task3;
 
 const char* Status = "{\"Message\":\"up and running\"}";
 
@@ -94,9 +97,12 @@ void messageReceived(String &topic, String &payload) {
   Serial.println("incoming: " + topic + " - " + payload);
   StaticJsonDocument<3000> doc;
   deserializeJson(doc, payload);
-
+  if(topic == hartbeat_topic)
+  {
+      callbackWD=payload.toInt();
+  }
   //Only process messages to this device
-  if (doc["device"] == Hostname)
+  else if (doc["device"] == Hostname)
   {
     if (strcmp(doc["command"], "pulsecount") == 0)
     {
@@ -175,6 +181,7 @@ void StartMqttClient(){
     mqttClient.onMessage(messageReceived);
     mqttClient.connect(Hostname, mqtt_user, mqtt_pw);
     mqttClient.subscribe(mqtt_to_device);
+    mqttClient.subscribe(hartbeat_topic);
     Serial.println(mqtt_to_device);
     timeClient.begin();
     timeClient.update();
@@ -191,15 +198,37 @@ void sensorloop( void * parameter )
   do{
 
     //detect flow pult
-    flowpin = digitalRead(flowmeterPin);
-    if(flowpin != lastflowpin)
+    flowpinstatus = digitalRead(flowmeterPin);
+    if(flowpinstatus != lastflowpinstatus)
     {
-      if(flowpin)
+      if(flowpinstatus)
       {
         pulse_since_last_loop++;
         pulsecount = pulsecount + 1;  
       }      
-      lastflowpin = flowpin;
+      lastflowpinstatus = flowpinstatus;
+    }
+
+    vTaskDelay(1);
+
+  }while(true);
+
+}
+
+void buttonloop( void * parameter )
+{
+  do{
+
+    //detect flow pult
+    buttonpinstatus = digitalRead(buttonPin);
+    if(buttonpinstatus != lastbuttonpinstatus)
+    {
+      if(buttonpinstatus)
+      {
+        pulse_since_last_loop++;
+        pulsecount = pulsecount + 1;  
+      }      
+      lastbuttonpinstatus = buttonpinstatus;
     }
 
     vTaskDelay(1);
@@ -219,8 +248,9 @@ void flowloop( void * parameter )
       flow_rate = (vol_pr_pulse * Factor * pulse_since_last_loop / 5.0);
       pulse_since_last_loop = 0.0;
 
-      callbackWD++;
-      if(callbackWD > 100)
+      //Watchdog. Must recieve new callback value from node-red to avoid reboot
+      callbackWD--;
+      if(callbackWD <= 0)
       {
          ESP.restart();
       }
@@ -229,31 +259,6 @@ void flowloop( void * parameter )
     vTaskDelay(1);
 
   }while(true);
-
-}
-
-static void DeviceTwinCallback(const unsigned char *payLoad, int size)
-{
-  char *temp = (char *)malloc(size + 1);
-  if (temp == NULL)
-  {
-    return;
-  }
-  memcpy(temp, payLoad, size);
-  temp[size] = '\0';
-  StaticJsonDocument<2000> doc;
-  deserializeJson(doc, payLoad);
-  long twinPulsecount = (unsigned long)doc["reported"]["pulsecount"];      
-  if (twinPulsecount > pulsecount)
-  {
-    pulsecount = twinPulsecount;
-  }  
-  int twinFlowMax = (int)doc["reported"]["flow_max"];      
-  if ((twinFlowMax > 0) & (twinFlowMax != flow_max))
-  {
-    flow_max = twinFlowMax;
-  }
-  free(temp);
 
 }
 
@@ -279,7 +284,19 @@ void setup() {
       &Task2,
       0);
 
- 
+   xTaskCreatePinnedToCore(
+      buttonloop,
+      "buttonloop",
+      6000,
+      NULL,
+      1,
+      &Task3,
+      0);
+
+  pinMode(16, OUTPUT); 
+  digitalWrite(16, 1);
+  pinMode(flowmeterPin, INPUT_PULLUP);
+  pinMode(buttonPin, INPUT_PULLUP);
 
   //Display
   display.init();
@@ -322,22 +339,23 @@ void loop()
 
     //Send report
     if (millis() - lastStatus > 10000) {                            // Start send status every 10 sec (just as an example)
-      Serial.println(Status);
-      mqttClient.publish(input_topic, String(pulsecount));                      //      send status to broker
+      
+      
+      String payload;
+      StaticJsonDocument<300> report;
+      report["hostname"] = devicename;
+      report["type"] = "flow";
+      report["flow"] = flow_rate;
+      report["pulsecount"] = pulsecount;
+      report["volume"] = pulsecount * vol_pr_pulse;
+      report["started"] = started ? 1 : 0;
+      
+      serializeJson(report, payload);
+      Serial.println(payload);
+      mqttClient.publish(input_topic, payload);                      //      send status to broker
       mqttClient.loop();                                            //      give control to MQTT to send message to broker
       lastStatus = millis();                                        //      remember time of last sent status message
       timeClient.update();
-
-      String payload;
-      StaticJsonDocument<300> startdoc;
-      startdoc["hostname"] = devicename;
-      startdoc["ip"] = ETH.localIP().toString();
-      startdoc["start"] = timeClient.getEpochTime();
-      serializeJson(startdoc, payload);
-      Serial.println(payload);
-      mqttClient.publish(start_topic, payload);
-      mqttClient.loop(); 
-
 
     }
     mqttClient.loop();                                              // internal household function for MQTT
@@ -345,7 +363,7 @@ void loop()
 
   //Update display
   display.clear();
-  display.drawString(0, 0, String(flow_rate * 1.0,3) + " " + FlowUnit);
+  display.drawString(0, 0, String(flow_rate * 1.0,3) + " " + FlowUnit + "   (" + callbackWD + (")"));
   display.drawString(0, 10, String(pulsecount * vol_pr_pulse, 3 ) + " " + VolumeUnit);     
   display.drawString(0,20, "Uptime: " + GetUptime());
 
