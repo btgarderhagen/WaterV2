@@ -8,20 +8,19 @@
 #include <NTPClient.h>
 #include "pass.cpp"
 
-const char* devicename = SECRET_DEVICE_KAI11;
-const char* mqtt_user = SECRET_BROKER_USER_KAI11; 
-const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;  
-const char* Description = SECRET_DEVICE_KAI11_DESC;
-const char* ssid     = "Garderhagen";
-const char* password = "1111111111111";
+const char* devicename = SECRET_DEVICE_KAI21;
+const char* mqtt_user = SECRET_BROKER_USER_KAI21; 
+const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI21;  
+const char* Description = SECRET_DEVICE_KAI21_DESC;
+const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI2.1" ;
 
-
-const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI6.2" ;
+const char* ssid     = SECRET_SSID_NSG_IOT;
+const char* password = SECRET_SSID_NSG_IOT_PW;
 const char* mqtt_broker = "mqtt.norseagroup.com";
 const char* input_topic = "/vann2/fromDevice";   
 const char* start_topic = "/vann/devicestart";   
 const char* hartbeat_topic = "/vann/hartbeat";   
-const char* Version = "2.04";
+const char* Version = "2.05";
 
 
 // MODUINO
@@ -106,6 +105,7 @@ void messageReceived(String &topic, String &payload) {
   {
       callbackWD=payload.toInt()/5;
   }
+
   //Only process messages to this device
   else if (doc["device"] == devicename)
   {
@@ -117,6 +117,7 @@ void messageReceived(String &topic, String &payload) {
     {
       pulsecount = pulsecount + doc["value"].as<int>();
       pulsecount_recieved = true;
+      do_startup_report = false;
     }
     else if (strcmp(doc["command"], "start_min_flow") == 0)
     {
@@ -144,6 +145,8 @@ void messageReceived(String &topic, String &payload) {
 void WiFiEvent(WiFiEvent_t event) {
     Serial.println("--- got event --- " + String(event));
   switch (event) {
+
+    //Cabled Ethernet
     case SYSTEM_EVENT_ETH_START:
       Serial.println("ETH Started");
       //set eth hostname here
@@ -172,6 +175,36 @@ void WiFiEvent(WiFiEvent_t event) {
       break;
     case SYSTEM_EVENT_ETH_STOP:
       Serial.println("ETH Stopped");
+      eth_is_connected = false;
+      break;
+
+    // Wireless network
+    case SYSTEM_EVENT_STA_START:
+      Serial.println("Wifi Started");
+      //set eth hostname here
+      ETH.setHostname(devicename);
+      break;
+    case SYSTEM_EVENT_STA_CONNECTED:
+      Serial.println("Wifi Connected");
+      break;
+    case SYSTEM_EVENT_STA_GOT_IP:
+      Serial.print("Wifi MAC: ");
+      Serial.print(WiFi.macAddress());
+      Serial.print(", IPv4: ");
+      Serial.print(WiFi.localIP());
+      eth_is_connected = true;
+      mqttClient_is_started = false;
+      break;
+    case SYSTEM_EVENT_STA_LOST_IP:
+      Serial.println("Wifi Disconnected");
+      eth_is_connected = false;
+      break;
+    case SYSTEM_EVENT_STA_DISCONNECTED:
+      Serial.println("Wifi Disconnected");
+      eth_is_connected = false;
+      break;
+    case SYSTEM_EVENT_STA_STOP:
+      Serial.println("Wifi Stopped");
       eth_is_connected = false;
       break;
     default:
@@ -312,6 +345,7 @@ void setup() {
       &Task3,
       0);
 
+  //pinMode(23, OUTPUT);
   pinMode(16, OUTPUT); 
   digitalWrite(16, 1);
   pinMode(flowmeterPin, INPUT_PULLUP);
@@ -330,9 +364,11 @@ void setup() {
   display.drawString(0,10, "Waiting for ethernet");
   display.display();
 
-  //WiFi.onEvent(WiFiEvent);
-  eth_exist = false; //ETH.begin(0, -1, 33, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
-  delay(2000);
+  WiFi.onEvent(WiFiEvent);
+  eth_exist = ETH.begin(0, -1, 33, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+
+  //eth_exist = false;
+  delay(500);
 
   if (!eth_exist)
   {
@@ -357,6 +393,7 @@ void setup() {
 void loop()
 {
   if(eth_is_connected & !mqttClient_is_started){
+    Serial.println("->Mqtt");
     StartMqttClient();
   } else if(eth_is_connected & mqttClient_is_started & do_startup_report)
   {
@@ -364,21 +401,29 @@ void loop()
     String payload;
     StaticJsonDocument<300> startdoc;
     startdoc["hostname"] = devicename;
-    startdoc["ip"] = ETH.localIP().toString();
+    
+    if(eth_exist)
+    {
+      startdoc["ip"] = ETH.localIP().toString();
+    }else
+    {
+      startdoc["ip"] = WiFi.localIP().toString();
+    }
+       
     startdoc["start"] = timeClient.getEpochTime();
     startdoc["version"] = Version;
     serializeJson(startdoc, payload);
     Serial.println(payload);
     mqttClient.publish(start_topic, payload);
     mqttClient.loop(); 
-    do_startup_report = false;
+    delay(1500);
   }
 
   //Only when connected
   if (eth_is_connected) { 
 
     //Send report
-    if (millis() - lastStatus > 10000) {                            // Start send status every 10 sec (just as an example)
+    if ((millis() - lastStatus > 60000) & !do_startup_report) {                            // Start send status every 10 sec (just as an example)
       
       
       String payload;
@@ -389,6 +434,7 @@ void loop()
       report["pulsecount"] = pulsecount;
       report["volume"] = pulsecount * vol_pr_pulse;
       report["started"] = started ? 1 : 0;
+      report["rssi"] = WiFi.RSSI();
       
       serializeJson(report, payload);
       Serial.println(payload);
@@ -429,6 +475,7 @@ void loop()
       if(!started)
       {
         Serial.println("Started");
+        //digitalWrite(23, 1);
         started = true;
         starttime = timeClient.getEpochTime();
         startpulse = pulsecount;
@@ -443,24 +490,28 @@ void loop()
         if(timeClient.getEpochTime() >= (lastflowtime + (stopp_no_flow_minutes)))
         {
           started= false;
+          //digitalWrite(23, 0);
           
-          //Send stopp message
-          String payload;
-          StaticJsonDocument<300> stopdoc;
-          
-          stopdoc["hostname"] = devicename;
-          stopdoc["type"] = "stopp";
-          stopdoc["starttime"] = starttime;
-          stopdoc["stopptime"] = timeClient.getEpochTime();
-          stopdoc["duration"] = timeClient.getEpochTime() - starttime;
-          stopdoc["startvolume"] = startpulse * vol_pr_pulse;
-          stopdoc["stoppvolume"] = pulsecount * vol_pr_pulse;
-          stopdoc["volume"] = (pulsecount - startpulse) * vol_pr_pulse ;
+          //Only send stop MQTT message if network is connected and first repor has been sent.
+          if(eth_is_connected & !do_startup_report)
+          {
+            //Send stopp message
+            String payload;
+            StaticJsonDocument<300> stopdoc;
+            
+            stopdoc["hostname"] = devicename;
+            stopdoc["type"] = "stopp";
+            stopdoc["starttime"] = starttime;
+            stopdoc["stopptime"] = timeClient.getEpochTime();
+            stopdoc["duration"] = timeClient.getEpochTime() - starttime;
+            stopdoc["startvolume"] = startpulse * vol_pr_pulse;
+            stopdoc["stoppvolume"] = pulsecount * vol_pr_pulse;
+            stopdoc["volume"] = (pulsecount - startpulse) * vol_pr_pulse ;
 
-          serializeJson(stopdoc, payload);
-          Serial.println(payload);
-          mqttClient.publish(input_topic, payload); 
-
+            serializeJson(stopdoc, payload);
+            Serial.println(payload);
+            mqttClient.publish(input_topic, payload); 
+          }
         }
       }
     }
