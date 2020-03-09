@@ -1,4 +1,5 @@
 #include <Arduino.h>
+//#include "WiFi.h"
 #include <SPI.h>
 #include <eth.h>
 #include <MQTTClient.h>
@@ -7,19 +8,20 @@
 #include <NTPClient.h>
 #include "pass.cpp"
 
-String devicename = SECRET_DEVICE_KAI62;
+const char* devicename = SECRET_DEVICE_KAI11;
 const char* mqtt_user = SECRET_BROKER_USER_KAI11; 
 const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI11;  
-const char* Description = SECRET_DEVICE_KAI62_DESC;
+const char* Description = SECRET_DEVICE_KAI11_DESC;
+const char* ssid     = "Garderhagen";
+const char* password = "1111111111111";
 
 
-const char* Hostname = devicename.c_str();
 const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI6.2" ;
 const char* mqtt_broker = "mqtt.norseagroup.com";
 const char* input_topic = "/vann2/fromDevice";   
 const char* start_topic = "/vann/devicestart";   
 const char* hartbeat_topic = "/vann/hartbeat";   
-const char* Version = "2.03";
+const char* Version = "2.04";
 
 
 // MODUINO
@@ -80,6 +82,7 @@ const char* FlowUnit = "m3/Hour";
 //const double Factor = 60.0;                       // Minute
 const double Factor = 60.0 * 60.0;                  // Hour
 
+bool eth_exist = false;
 unsigned long boot_timestamp = 0;
 String boot_time = "";
 
@@ -104,7 +107,7 @@ void messageReceived(String &topic, String &payload) {
       callbackWD=payload.toInt()/5;
   }
   //Only process messages to this device
-  else if (doc["device"] == Hostname)
+  else if (doc["device"] == devicename)
   {
     if (strcmp(doc["command"], "pulsecount") == 0)
     {
@@ -139,11 +142,12 @@ void messageReceived(String &topic, String &payload) {
 }
 
 void WiFiEvent(WiFiEvent_t event) {
+    Serial.println("--- got event --- " + String(event));
   switch (event) {
     case SYSTEM_EVENT_ETH_START:
       Serial.println("ETH Started");
       //set eth hostname here
-      ETH.setHostname(Hostname);
+      ETH.setHostname(devicename);
       break;
     case SYSTEM_EVENT_ETH_CONNECTED:
       Serial.println("ETH Connected");
@@ -194,7 +198,7 @@ void StartMqttClient(){
   Serial.println("Starting MQTT Client");
     mqttClient.begin(mqtt_broker, 8883, TCP);           //   config MQTT Server, use port 8883 for secure connection
     mqttClient.onMessage(messageReceived);
-    mqttClient.connect(Hostname, mqtt_user, mqtt_pw);
+    mqttClient.connect(devicename, mqtt_user, mqtt_pw);
     mqttClient.subscribe(mqtt_to_device);
     mqttClient.subscribe(hartbeat_topic);
     Serial.println(mqtt_to_device);
@@ -326,8 +330,28 @@ void setup() {
   display.drawString(0,10, "Waiting for ethernet");
   display.display();
 
-  WiFi.onEvent(WiFiEvent);
-  ETH.begin(0, -1, 33, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+  //WiFi.onEvent(WiFiEvent);
+  eth_exist = false; //ETH.begin(0, -1, 33, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+  delay(2000);
+
+  if (!eth_exist)
+  {
+    Serial.println("Trying wifi");
+    WiFi.setAutoConnect(true);
+    WiFi.setAutoReconnect(true);
+    WiFi.mode(WIFI_STA); 
+    WiFi.setHostname(devicename);
+    WiFi.begin(ssid,password);
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+
 }
 
 void loop()
