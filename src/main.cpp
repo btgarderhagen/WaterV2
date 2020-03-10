@@ -8,11 +8,11 @@
 #include <NTPClient.h>
 #include "pass.cpp"
 
-const char* devicename = SECRET_DEVICE_KAI62;
-const char* mqtt_user = SECRET_BROKER_USER_KAI62; 
-const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI62;  
-const char* Description = SECRET_DEVICE_KAI62_DESC;
-const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI6.2" ;
+const char* devicename = SECRET_DEVICE_KAI51;
+const char* mqtt_user = SECRET_BROKER_USER_KAI51; 
+const char* mqtt_pw = SECRET_BROKER_PASSWORD_KAI51;  
+const char* Description = SECRET_DEVICE_KAI51_DESC;
+const char* mqtt_to_device = "/vann2/toDevice/DUS-VANN-KAI5.1" ;
 
 const char* ssid     = SECRET_SSID_NSG_IOT;
 const char* password = SECRET_SSID_NSG_IOT_PW;
@@ -20,7 +20,7 @@ const char* mqtt_broker = "mqtt.norseagroup.com";
 const char* input_topic = "/vann2/fromDevice";   
 const char* start_topic = "/vann/devicestart";   
 const char* hartbeat_topic = "/vann/hartbeat";   
-const char* Version = "2.07";
+const char* Version = "2.08";
 
 
 // MODUINO
@@ -367,8 +367,8 @@ void setup() {
 
   WiFi.onEvent(WiFiEvent);
   eth_exist = ETH.begin(0, -1, 33, 18, ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
-
   eth_exist = false;
+
   delay(500);
 
   if (!eth_exist)
@@ -488,7 +488,7 @@ void loop()
       //flow smaller than min
       if(started)
       {
-        if(timeClient.getEpochTime() >= (lastflowtime + (stopp_no_flow_minutes)))
+        if(timeClient.getEpochTime() >= (lastflowtime + (stopp_no_flow_minutes * 60)))
         {
           started= false;
           //digitalWrite(23, 0);
